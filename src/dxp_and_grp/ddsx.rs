@@ -210,6 +210,10 @@ impl Texture {
 		if header.flags & FLG_ARRTEX != 0 {
 			return Err(unsupported("array textures"));
 		}
+		// Neither the mip reordering nor DDS has a layout for both at once
+		if header.is_cubemap() && header.is_volume() {
+			return Err(unsupported("volume and cubemap at once"));
+		}
 
 		let mem_size = header.mem_size as usize;
 		let mut data = match header.compression() {
@@ -723,6 +727,13 @@ mod test {
 		assert!(Texture::from_ddsx(empty, &[]).is_err());
 		assert!(Texture::from_ddsx(dxt1(8, 1, FLG_NEED_PAIRED_BASETEX, 32), &[0; 32]).is_err());
 		assert!(Texture::from_ddsx(dxt1(8, 2, 0, 40), &[0; 39]).is_err());
+		// Reversed mips of a volume cubemap were reordered as a plain cubemap, leaving the last third
+		// of the data zeroed
+		let cube_volume = DdsxHeader {
+			depth: 2,
+			..dxt1(4, 2, FLG_CUBTEX | FLG_VOLTEX | FLG_REV_MIP_ORDER, 144)
+		};
+		assert!(Texture::from_ddsx(cube_volume, &[1; 144]).is_err());
 	}
 
 	#[test]
