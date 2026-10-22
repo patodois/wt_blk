@@ -101,7 +101,9 @@ impl<'a> DxpPack<'a> {
 			)));
 		}
 		let dump_size = u32_at(file, 0xC)?;
-		let dump = file.get(0x10..0x10 + dump_size).ok_or(oob(0x10 + dump_size))?;
+		let dump = file
+			.get(0x10..0x10 + dump_size)
+			.ok_or(oob(0x10 + dump_size))?;
 
 		let (names_ofs, count) = (u32_at(dump, 0x00)?, u32_at(dump, 0x04)?);
 		let (headers_ofs, headers_count) = (u32_at(dump, 0x10)?, u32_at(dump, 0x14)?);
@@ -119,8 +121,7 @@ impl<'a> DxpPack<'a> {
 				.to_str()?
 				.to_owned();
 			let header_ofs = headers_ofs + i * DdsxHeader::SIZE;
-			let header =
-				DdsxHeader::parse(dump.get(header_ofs..).ok_or(oob(header_ofs))?)?;
+			let header = DdsxHeader::parse(dump.get(header_ofs..).ok_or(oob(header_ofs))?)?;
 			let record = records_ofs + i * 24;
 			let offset = u32_at(dump, record + 0x0C)?;
 			let packed = u32_at(dump, record + 0x10)?;

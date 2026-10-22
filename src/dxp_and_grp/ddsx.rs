@@ -73,10 +73,12 @@ impl DdsxHeader {
 	pub const SIZE: usize = 32;
 
 	pub fn parse(bytes: &[u8]) -> Result<Self, DxpGrpError> {
-		let b = bytes.get(..Self::SIZE).ok_or(DxpGrpError::IndexingFileOutOfBounds {
-			current_ptr: Self::SIZE,
-			file_size:   bytes.len(),
-		})?;
+		let b = bytes
+			.get(..Self::SIZE)
+			.ok_or(DxpGrpError::IndexingFileOutOfBounds {
+				current_ptr: Self::SIZE,
+				file_size:   bytes.len(),
+			})?;
 		let u16_at = |o: usize| u16::from_le_bytes([b[o], b[o + 1]]);
 		let u32_at = |o: usize| u32::from_le_bytes([b[o], b[o + 1], b[o + 2], b[o + 3]]);
 		let label = u32_at(0);
@@ -203,14 +205,13 @@ impl Texture {
 
 		let mem_size = header.mem_size as usize;
 		let mut data = match header.compression() {
-			Compression::None => {
-				raw.get(..mem_size)
-					.ok_or(DxpGrpError::IndexingFileOutOfBounds {
-						current_ptr: mem_size,
-						file_size:   raw.len(),
-					})?
-					.to_vec()
-			},
+			Compression::None => raw
+				.get(..mem_size)
+				.ok_or(DxpGrpError::IndexingFileOutOfBounds {
+					current_ptr: mem_size,
+					file_size:   raw.len(),
+				})?
+				.to_vec(),
 			Compression::Zstd => {
 				let packed = packed_slice(&header, raw)?;
 				zstd::bulk::decompress(packed, mem_size)
@@ -340,10 +341,11 @@ impl Texture {
 
 fn packed_slice<'a>(header: &DdsxHeader, raw: &'a [u8]) -> Result<&'a [u8], DxpGrpError> {
 	let packed = header.packed_size as usize;
-	raw.get(..packed).ok_or(DxpGrpError::IndexingFileOutOfBounds {
-		current_ptr: packed,
-		file_size:   raw.len(),
-	})
+	raw.get(..packed)
+		.ok_or(DxpGrpError::IndexingFileOutOfBounds {
+			current_ptr: packed,
+			file_size:   raw.len(),
+		})
 }
 
 /// Reorders mips stored smallest-first into DDS order, see `ddsx_forward_mips_inplace` in Dagor
@@ -412,20 +414,14 @@ impl DdsFormat {
 			dxgi_format: None,
 		};
 		Ok(match h.d3d_format {
-			D3DFMT_A8R8G8B8 => masked(DDPF_RGB | DDPF_ALPHAPIXELS, [
-				32,
-				0x00FF_0000,
-				0x0000_FF00,
-				0x0000_00FF,
-				0xFF00_0000,
-			]),
-			D3DFMT_A8B8G8R8 => masked(DDPF_RGB | DDPF_ALPHAPIXELS, [
-				32,
-				0x0000_00FF,
-				0x0000_FF00,
-				0x00FF_0000,
-				0xFF00_0000,
-			]),
+			D3DFMT_A8R8G8B8 => masked(
+				DDPF_RGB | DDPF_ALPHAPIXELS,
+				[32, 0x00FF_0000, 0x0000_FF00, 0x0000_00FF, 0xFF00_0000],
+			),
+			D3DFMT_A8B8G8R8 => masked(
+				DDPF_RGB | DDPF_ALPHAPIXELS,
+				[32, 0x0000_00FF, 0x0000_FF00, 0x00FF_0000, 0xFF00_0000],
+			),
 			D3DFMT_L8 => masked(DDPF_LUMINANCE, [8, 0xFF, 0, 0, 0]),
 			D3DFMT_A8 => masked(DDPF_ALPHA, [8, 0, 0, 0, 0xFF]),
 			f if f == u32::from_le_bytes(*b"BC7 ") => Self {
@@ -595,7 +591,10 @@ mod test {
 		raw[0x18..0x1C].copy_from_slice(&174_776_u32.to_le_bytes());
 		raw[0x1C..0x20].copy_from_slice(&110_032_u32.to_le_bytes());
 		let h = DdsxHeader::parse(&raw).unwrap();
-		assert_eq!((h.width, h.height, h.levels, h.dxt_shift), (512, 256, 10, 4));
+		assert_eq!(
+			(h.width, h.height, h.levels, h.dxt_shift),
+			(512, 256, 10, 4)
+		);
 		assert_eq!(h.compression(), Compression::Oodle);
 		assert_eq!(h.format_name(), "DXT5");
 		assert!(DdsxHeader::parse(b"DDSy and more than thirty two bytes").is_err());
@@ -615,7 +614,8 @@ mod test {
 	fn reversed_cubemap_mips_become_face_major() {
 		// 4x4 DXT1 cubemap with 2 levels of 8 bytes each, stored as (mip1 face0..5), (mip0 face0..5)
 		let stored: Vec<u8> = (0..12_u8).flat_map(|i| [i; 8]).collect();
-		let tex = Texture::from_ddsx(dxt1(4, 2, FLG_REV_MIP_ORDER | FLG_CUBTEX, 96), &stored).unwrap();
+		let tex =
+			Texture::from_ddsx(dxt1(4, 2, FLG_REV_MIP_ORDER | FLG_CUBTEX, 96), &stored).unwrap();
 		for face in 0..6 {
 			let chain = &tex.data[face * 16..face * 16 + 16];
 			assert_eq!(&chain[..8], &[6 + face as u8; 8], "face {face} mip0");
@@ -666,7 +666,10 @@ mod test {
 			dxt_shift: 4,
 			..dxt1(4, 1, 0, 16)
 		};
-		let dds = Texture::from_ddsx(header, &[0; 16]).unwrap().to_dds().unwrap();
+		let dds = Texture::from_ddsx(header, &[0; 16])
+			.unwrap()
+			.to_dds()
+			.unwrap();
 		assert_eq!(&dds[84..88], b"DX10");
 		assert_eq!(u32::from_le_bytes(dds[128..132].try_into().unwrap()), 98);
 		assert_eq!(dds.len(), 148 + 16);
