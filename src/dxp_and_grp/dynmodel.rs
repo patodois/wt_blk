@@ -25,7 +25,12 @@
 
 use std::io::Read;
 
-use crate::dxp_and_grp::{cursor::Cursor, error::DxpGrpError, meshopt::decode_index_sequence};
+use crate::dxp_and_grp::{
+	cursor::Cursor,
+	error::DxpGrpError,
+	meshopt::decode_index_sequence,
+	unpack,
+};
 
 // Vertex channel types (VSDT_*) and usages (SCUSAGE_*), from Dagor's dag_consts_base.h and dag_shaderCommon.h
 pub mod channel {
@@ -160,16 +165,7 @@ pub(crate) fn unpack_block(block: &[u8]) -> Result<Vec<u8>, DxpGrpError> {
 	}
 	let mut r = Cursor::new(block);
 	let size = r.u32()? as usize;
-	let mut out = vec![0_u8; size];
-	let written = oozextract::Extractor::new()
-		.read_from_slice(r.rest(), &mut out)
-		.map_err(|e| DxpGrpError::Decompression(format!("{e:?}")))?;
-	if written != size {
-		return Err(DxpGrpError::Decompression(format!(
-			"Oodle produced {written} bytes, expected {size}"
-		)));
-	}
-	Ok(out)
+	unpack::oodle(r.rest(), size)
 }
 
 fn packed_index_size(w1: u32, w2: u32, flags: u32) -> usize {

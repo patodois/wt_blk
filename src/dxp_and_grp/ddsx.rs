@@ -21,7 +21,7 @@
 //! `0x2_0000` data is a delta against a paired base texture, `0x4_0000` mips are stored smallest first.
 //! The top three bits select the compression: `0x2` zstd, `0x3` Oodle, `0x4` zlib, `0x2 << 29` 7zip.
 
-use crate::dxp_and_grp::error::DxpGrpError;
+use crate::dxp_and_grp::{error::DxpGrpError, unpack};
 
 pub const DDSX_LABEL: u32 = u32::from_le_bytes(*b"DDSx");
 
@@ -220,24 +220,8 @@ impl Texture {
 					file_size:   raw.len(),
 				})?
 				.to_vec(),
-			Compression::Zstd => {
-				let packed = packed_slice(&header, raw)?;
-				zstd::bulk::decompress(packed, mem_size)
-					.map_err(|e| DxpGrpError::Decompression(e.to_string()))?
-			},
-			Compression::Oodle => {
-				let packed = packed_slice(&header, raw)?;
-				let mut out = vec![0_u8; mem_size];
-				let written = oozextract::Extractor::new()
-					.read_from_slice(packed, &mut out)
-					.map_err(|e| DxpGrpError::Decompression(format!("{e:?}")))?;
-				if written != mem_size {
-					return Err(DxpGrpError::Decompression(format!(
-						"Oodle produced {written} bytes, expected {mem_size}"
-					)));
-				}
-				out
-			},
+			Compression::Zstd => unpack::zstd(packed_slice(&header, raw)?, mem_size)?,
+			Compression::Oodle => unpack::oodle(packed_slice(&header, raw)?, mem_size)?,
 			Compression::Zlib => return Err(unsupported("zlib compression")),
 			Compression::SevenZip => return Err(unsupported("7zip compression")),
 		};
@@ -699,6 +683,32 @@ mod test {
 			..dxt1(8, 255, FLG_VOLTEX, 0)
 		};
 		assert!(Texture::from_ddsx(volume, &[0; 16]).is_err());
+	}
+
+	#[test]
+	fn packed_sizes_are_not_trusted_for_allocation() {
+		// 4 GiB of output claimed for a few bytes: Oodle used to allocate it all before reading the
+		// stream, zstd reserved it as capacity
+		let oodle = DdsxHeader {
+			mem_size: u32::MAX,
+			packed_size: 6,
+			..dxt1(8, 1, FLG_OODLE, 0)
+		};
+		assert!(Texture::from_ddsx(oodle, &[0x8C, 0x06, 0, 0, 0, 0]).is_err());
+
+		let packed = zstd::bulk::compress(&[7; 32], 0).unwrap();
+		let zstd = DdsxHeader {
+			mem_size: u32::MAX,
+			packed_size: packed.len() as u32,
+			..dxt1(8, 1, FLG_ZSTD, 0)
+		};
+		assert_eq!(Texture::from_ddsx(zstd, &packed).unwrap().data, [7; 32]);
+		// Still an upper bound
+		let zstd = DdsxHeader {
+			mem_size: 31,
+			..zstd
+		};
+		assert!(Texture::from_ddsx(zstd, &packed).is_err());
 	}
 
 	#[test]

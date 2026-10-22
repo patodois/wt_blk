@@ -15,6 +15,7 @@ pub mod geom_node_tree;
 pub mod grp;
 pub mod grp_pack;
 pub mod meshopt;
+mod unpack;
 
 pub fn parse_either(file: &[u8]) -> Result<Vec<String>, DxpGrpError> {
 	if file.len() < 4 {
@@ -206,6 +207,19 @@ mod test {
 				);
 			}
 		}
+	}
+
+	#[test]
+	fn packed_block_sizes_are_not_trusted_for_allocation() {
+		use crate::dxp_and_grp::geom_node_tree::GeomNodeTree;
+
+		// A compressed node tree whose Oodle block claims 4 GiB, which used to be allocated up front
+		let mut res = Vec::new();
+		for v in [0, 0x8000_0001, 10, u32::MAX] {
+			res.extend_from_slice(&u32::to_le_bytes(v));
+		}
+		res.extend_from_slice(&[0x8C, 0x06, 0, 0, 0, 0]);
+		assert!(GeomNodeTree::parse(&res).is_err());
 	}
 
 	#[test]
