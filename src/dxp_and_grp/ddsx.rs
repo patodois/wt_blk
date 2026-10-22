@@ -456,7 +456,25 @@ impl Texture {
 	/// Decodes the top mip (first face or slice) to 8-bit RGBA
 	pub fn to_rgba(&self) -> Result<Vec<u8>, DxpGrpError> {
 		let (w, h) = (self.width() as usize, self.height() as usize);
-		let top = &self.data[..self.header.surface_size(0)];
+		// Size, block size and bits per pixel are separate header fields: check that the top mip holds
+		// what the format needs before allocating for its pixels
+		let needed = self.top_mip_bytes().ok_or_else(|| {
+			DxpGrpError::UnsupportedTexture(format!(
+				"PNG conversion of {}",
+				self.header.format_name()
+			))
+		})?;
+		let size = self.header.surface_size(0);
+		let top = self
+			.data
+			.get(..size)
+			.filter(|top| top.len() == needed)
+			.ok_or_else(|| {
+				DxpGrpError::UnsupportedTexture(format!(
+					"{w}x{h} {} with a top mip of {size} bytes",
+					self.header.format_name()
+				))
+			})?;
 		let fourcc = |s: &[u8; 4]| u32::from_le_bytes(*s);
 		let decoder: Option<fn(&[u8], usize, usize, &mut [u32]) -> Result<(), &'static str>> =
 			match self.header.d3d_format {
@@ -519,6 +537,23 @@ impl Texture {
 			},
 		}
 		Ok(rgba)
+	}
+
+	/// Bytes in the top mip of a format [`Self::to_rgba`] converts
+	fn top_mip_bytes(&self) -> Option<usize> {
+		let (w, h) = (self.width() as usize, self.height() as usize);
+		let blocks = w.div_ceil(4) * h.div_ceil(4);
+		Some(match &self.header.d3d_format.to_le_bytes() {
+			b"DXT1" | b"ATI1" => blocks * 8,
+			b"DXT3" | b"DXT5" | b"ATI2" | b"BC7 " => blocks * 16,
+			_ => match self.header.d3d_format {
+				D3DFMT_A8R8G8B8 | D3DFMT_A8B8G8R8 => w * h * 4,
+				D3DFMT_L8 | D3DFMT_A8 => w * h,
+				D3DFMT_A16B16G16R16F => w * h * 8,
+				D3DFMT_R16F => w * h * 2,
+				_ => return None,
+			},
+		})
 	}
 
 	/// Encodes the top mip as a PNG (HDR formats are clamped)
@@ -720,6 +755,32 @@ mod test {
 		let tex = Texture::from_ddsx(header, &[1, 2, 3, 4]).unwrap();
 		assert_eq!(tex.to_rgba().unwrap(), [3, 2, 1, 4]);
 		assert_eq!(&tex.to_png().unwrap()[1..4], b"PNG");
+	}
+
+	#[cfg(feature = "png")]
+	#[test]
+	fn rgba_needs_data_that_matches_the_format() {
+		// 32-bit pixels described with 8 bits per pixel: the top mip is 4 bytes, not the 16 that 2x2
+		// pixels need, and the conversion used to return a single pixel
+		let header = DdsxHeader {
+			d3d_format: D3DFMT_A8R8G8B8,
+			dxt_shift: 0,
+			bits_per_pixel: 8,
+			..dxt1(2, 1, 0, 4)
+		};
+		let tex = Texture::from_ddsx(header, &[0; 4]).unwrap();
+		assert!(tex.to_rgba().is_err());
+
+		// DXT1 without a block size: no surface data at all, yet the conversion allocated room for
+		// 65535x65535 pixels (16 GiB) before decoding
+		let header = DdsxHeader {
+			dxt_shift: 0,
+			..dxt1(65535, 1, 0, 1)
+		};
+		let tex = Texture::from_ddsx(header, &[0]).unwrap();
+		assert!(tex.data.is_empty());
+		assert!(tex.to_rgba().is_err());
+		assert!(tex.to_png().is_err());
 	}
 
 	#[cfg(feature = "png")]
