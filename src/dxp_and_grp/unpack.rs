@@ -1,6 +1,9 @@
 //! Decompression with output sizes taken from file headers, which may lie
 
-use std::io::Read;
+use std::{
+	io::Read,
+	panic::{self, AssertUnwindSafe},
+};
 
 use crate::dxp_and_grp::error::DxpGrpError;
 
@@ -25,9 +28,14 @@ pub(crate) fn oodle(packed: &[u8], size: usize) -> Result<Vec<u8>, DxpGrpError> 
 	let mut len = size.min(OODLE_FIRST_TRY);
 	loop {
 		let mut out = vec![0_u8; len];
-		let written = oozextract::Extractor::new()
-			.read_from_slice(packed, &mut out)
-			.map_err(|e| DxpGrpError::Decompression(format!("{e:?}")))?;
+		// oozextract 0.5.5 panics on some malformed streams (slicing out of range in its LZNA and
+		// Bitknit decoders, an assertion when building Huffman tables): report those as errors
+		// rather than taking the caller down
+		let written = panic::catch_unwind(AssertUnwindSafe(|| {
+			oozextract::Extractor::new().read_from_slice(packed, &mut out)
+		}))
+		.map_err(|_| DxpGrpError::Decompression("Oodle decoder panicked".to_owned()))?
+		.map_err(|e| DxpGrpError::Decompression(format!("{e:?}")))?;
 		if written != len {
 			return Err(DxpGrpError::Decompression(format!(
 				"Oodle produced {written} bytes, expected {size}"
@@ -80,5 +88,31 @@ mod test {
 		// Sizes beyond 256 KiB per 6 bytes of stream are rejected before decoding
 		assert!(oodle(&[0x4C, 0x06, 0, 0, 0, 0], OODLE_BLOCK + 1).is_err());
 		assert!(oodle(&[0x8C, 0x06, 0, 0, 0, 0], u32::MAX as usize).is_err());
+	}
+
+	#[test]
+	fn oodle_decoder_panics_become_errors() {
+		// Streams found by fuzzing: a few header bytes, then zeros apart from some single bytes
+		let stream = |len: usize, head: &[u8], pokes: &[(usize, u8)]| {
+			let mut s = vec![0_u8; len];
+			s[..head.len()].copy_from_slice(head);
+			for &(at, b) in pokes {
+				s[at] = b;
+			}
+			s
+		};
+		// LZNA: slice end out of range
+		let lzna = stream(63, &[0x8C, 0x85, 0, 0x3A], &[(13, 0x91), (23, 0x85)]);
+		assert!(oodle(&lzna, 40).is_err());
+		// Bitknit: subtraction overflow (debug builds), then slice end out of range
+		let bitknit = stream(70, &[0x8C, 0x8B, 0, 0x41, 0, 0, 0, 1], &[(33, 0xFF)]);
+		assert!(oodle(&bitknit, 262_184).is_err());
+		// Mermaid: assertion failed while building a Huffman table
+		let mermaid = stream(
+			218,
+			&[0x0C, 0x0A, 0, 0, 0xD4, 0x40, 0x30, 0, 0, 0x80, 0x3F],
+			&[],
+		);
+		assert!(oodle(&mermaid, 46_376).is_err());
 	}
 }
