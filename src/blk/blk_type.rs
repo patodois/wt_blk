@@ -10,6 +10,7 @@ use serde_json::{
 use crate::blk::{
 	blk_string::BlkString,
 	blk_type::blk_type_id::*,
+	plaintext_serialize::blockfile::quote_string,
 	util::{bytes_to_float, bytes_to_int, bytes_to_long, bytes_to_offset, bytes_to_uint},
 };
 
@@ -397,9 +398,7 @@ impl BlkType {
 			write!(f, "{}=", self.blk_type_name())?;
 		}
 		match self {
-			BlkType::Str(v) => {
-				write!(f, "\"{}\"", v)
-			},
+			BlkType::Str(v) => f.write_all(quote_string(v).as_bytes()),
 			BlkType::Int(v) => write!(f, "{v}"),
 			BlkType::Int2(v) => {
 				write!(f, "{}, {}", v[0], v[1])
