@@ -10,6 +10,7 @@ use crate::blk::{
 	file::FileType,
 	make_strict_test,
 	name_map::NameMap,
+	unpack_blk,
 	zstd::decode_zstd,
 };
 
@@ -147,3 +148,7 @@ fn blk_without_names() {
 	assert_eq!(parsed, BlkField::Struct(blk_str("root"), vec![]));
 }
 
+#[test]
+fn empty_blk_is_an_error() {
+	assert!(unpack_blk(&mut vec![], None, None).is_err());
+}
