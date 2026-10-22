@@ -282,12 +282,36 @@ fn read_vdata(vd: &[u8], payload_start: usize) -> Result<Vec<VData>, DxpGrpError
 	Ok(out)
 }
 
-/// ShaderMesh at `at` inside `dump`, whose pointers are relative to the start of `dump`
+/// ShaderMesh at `at` inside `dump`, whose pointers are relative to the start of `dump`: an element
+/// table, then either the end index of each render stage's elements (bit 31 set in the word at +0x20)
+/// or a second element table at +0x10, which holds the see-through parts (glass, sights, flares)
 fn read_mesh(dump: &[u8], at: usize, vdata: &[VData]) -> Result<Vec<Elem>, DxpGrpError> {
 	let mut r = Cursor::at(dump, at)?;
-	let (elems_ofs, count) = (r.u32()? as usize, r.u32()? as usize);
-	check_table(dump, elems_ofs, count, 48)?;
-	let mut elems = Vec::with_capacity(count);
+	let main = (r.u32()? as usize, r.u32()? as usize);
+	r.skip(8)?;
+	let second = (r.u32()? as usize, r.u32()? as usize);
+	r.skip(8)?;
+	let tables = if r.u32()? & 0x8000_0000 != 0 {
+		&[main][..]
+	} else {
+		&[main, second][..]
+	};
+	let mut elems = Vec::new();
+	for &(elems_ofs, count) in tables {
+		check_table(dump, elems_ofs, count, 48)?;
+		elems.reserve(count);
+		read_elems(dump, elems_ofs, count, vdata, &mut elems)?;
+	}
+	Ok(elems)
+}
+
+fn read_elems(
+	dump: &[u8],
+	elems_ofs: usize,
+	count: usize,
+	vdata: &[VData],
+	elems: &mut Vec<Elem>,
+) -> Result<(), DxpGrpError> {
 	for i in 0..count {
 		let mut e = Cursor::at(dump, elems_ofs + i * 48)?;
 		e.skip(8)?; // shader element, set at runtime
@@ -320,7 +344,7 @@ fn read_mesh(dump: &[u8], at: usize, vdata: &[VData]) -> Result<Vec<Elem>, DxpGr
 		}
 		elems.push(elem);
 	}
-	Ok(elems)
+	Ok(())
 }
 
 impl DynModel {

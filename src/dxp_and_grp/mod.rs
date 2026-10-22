@@ -140,8 +140,15 @@ mod test {
 			.flat_map(|r| &r.elems)
 			.map(|e| e.triangles)
 			.sum();
-		assert_eq!(triangles, 135_665);
+		assert_eq!(triangles, 137_632);
 		assert!(lod.skins.is_empty() && model.skin_vdata.is_empty());
+		// See-through parts are in a second element table of their meshes, which used to be skipped
+		let triangles_of = |node: &str| -> usize {
+			let rigid = lod.rigids.iter().find(|r| r.node == node).unwrap();
+			rigid.elems.iter().map(|e| e.triangles).sum()
+		};
+		assert_eq!(triangles_of("glass"), 182);
+		assert_eq!(triangles_of("collimator"), 2);
 
 		// Every part is placed by a skeleton node ("@root" is the model origin)
 		for rigid in &lod.rigids {
@@ -379,13 +386,13 @@ mod test {
 			res.truncate(res.len() - 2);
 			res.extend_from_slice(&long);
 			res.push(0);
-			// Scene: rigids at 24, each with an 8-byte empty mesh
+			// Scene: rigids at 24, each with an empty 40-byte mesh
 			put(&mut res, &[24, rigids as u32, 0, 0, 0, 0]);
 			for _ in 0..rigids {
-				put(&mut res, &[8, 0, 0, 0, 0, 0, 0, 0]);
+				put(&mut res, &[40, 0, 0, 0, 0, 0, 0, 0]);
 			}
 			for _ in 0..rigids {
-				put(&mut res, &[0, 0]);
+				put(&mut res, &[0; 10]);
 			}
 			res
 		};
