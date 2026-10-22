@@ -153,7 +153,8 @@ impl DdsxHeader {
 		if self.dxt_shift == 0 {
 			w * h * usize::from(self.bits_per_pixel) / 8
 		} else {
-			((w >> 2).max(1) * (h >> 2).max(1)) << self.dxt_shift
+			// Partial blocks at the edges of sizes that are not a multiple of 4 are stored whole
+			(w.div_ceil(4) * h.div_ceil(4)) << self.dxt_shift
 		}
 	}
 
@@ -615,6 +616,18 @@ mod test {
 		let tex = Texture::from_ddsx(dxt1(8, 2, FLG_REV_MIP_ORDER, 40), &stored).unwrap();
 		assert_eq!(&tex.data[..32], &[0_u8; 32]);
 		assert_eq!(&tex.data[32..], &[1_u8; 8]);
+	}
+
+	#[test]
+	fn block_sizes_round_up() {
+		// 6x6 DXT1: mip0 is 2x2 blocks (32 bytes), mip1 (3x3) one block, stored smallest first
+		let mut stored = vec![1_u8; 8];
+		stored.extend_from_slice(&[0_u8; 32]);
+		let tex = Texture::from_ddsx(dxt1(6, 2, FLG_REV_MIP_ORDER, 40), &stored).unwrap();
+		assert_eq!(&tex.data[..32], &[0_u8; 32]);
+		assert_eq!(&tex.data[32..], &[1_u8; 8]);
+		#[cfg(feature = "png")]
+		assert_eq!(tex.to_rgba().unwrap().len(), 6 * 6 * 4);
 	}
 
 	#[test]
