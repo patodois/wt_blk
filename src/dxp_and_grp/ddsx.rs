@@ -41,6 +41,8 @@ const D3DFMT_A8R8G8B8: u32 = 21;
 const D3DFMT_A8: u32 = 28;
 const D3DFMT_A8B8G8R8: u32 = 32;
 const D3DFMT_L8: u32 = 50;
+const D3DFMT_R16F: u32 = 111;
+const D3DFMT_A16B16G16R16F: u32 = 113;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DdsxHeader {
@@ -488,6 +490,20 @@ impl Texture {
 					rgba.extend_from_slice(&[0xFF, 0xFF, 0xFF, a]);
 				}
 			},
+			// HDR formats are clamped to [0, 1]
+			D3DFMT_A16B16G16R16F => {
+				for px in top.chunks_exact(8) {
+					for c in px.chunks_exact(2) {
+						rgba.push(unorm8(f16_to_f32(u16::from_le_bytes([c[0], c[1]]))));
+					}
+				}
+			},
+			D3DFMT_R16F => {
+				for c in top.chunks_exact(2) {
+					let r = unorm8(f16_to_f32(u16::from_le_bytes([c[0], c[1]])));
+					rgba.extend_from_slice(&[r, r, r, 0xFF]);
+				}
+			},
 			_ => {
 				return Err(DxpGrpError::UnsupportedTexture(format!(
 					"PNG conversion of {}",
@@ -498,7 +514,7 @@ impl Texture {
 		Ok(rgba)
 	}
 
-	/// Encodes the top mip as a PNG
+	/// Encodes the top mip as a PNG (HDR formats are clamped)
 	pub fn to_png(&self) -> Result<Vec<u8>, DxpGrpError> {
 		let rgba = self.to_rgba()?;
 		let mut out = Vec::new();
@@ -516,6 +532,30 @@ impl Texture {
 			.map_err(|e| DxpGrpError::Encoding(e.to_string()))?;
 		Ok(out)
 	}
+}
+
+#[cfg(feature = "png")]
+fn unorm8(v: f32) -> u8 {
+	(v.clamp(0.0, 1.0) * 255.0).round() as u8
+}
+
+/// IEEE 754 half to single precision
+#[cfg(feature = "png")]
+fn f16_to_f32(h: u16) -> f32 {
+	let sign = u32::from(h >> 15) << 31;
+	let exp = u32::from((h >> 10) & 0x1F);
+	let mant = u32::from(h & 0x3FF);
+	let bits = match (exp, mant) {
+		(0, 0) => sign,
+		// Subnormal: renormalise the mantissa
+		(0, _) => {
+			let shift = mant.leading_zeros() - 21;
+			sign | ((113 - shift) << 23) | ((mant << shift) & 0x3FF) << 13
+		},
+		(0x1F, _) => sign | 0x7F80_0000 | (mant << 13),
+		_ => sign | ((exp + 112) << 23) | (mant << 13),
+	};
+	f32::from_bits(bits)
 }
 
 #[cfg(test)]
@@ -629,5 +669,29 @@ mod test {
 		let tex = Texture::from_ddsx(header, &[1, 2, 3, 4]).unwrap();
 		assert_eq!(tex.to_rgba().unwrap(), [3, 2, 1, 4]);
 		assert_eq!(&tex.to_png().unwrap()[1..4], b"PNG");
+	}
+
+	#[cfg(feature = "png")]
+	#[test]
+	fn half_floats() {
+		assert_eq!(f16_to_f32(0x3C00), 1.0);
+		assert_eq!(f16_to_f32(0xC000), -2.0);
+		assert_eq!(f16_to_f32(0x3800), 0.5);
+		assert_eq!(f16_to_f32(0x0001), 2.0_f32.powi(-24));
+		assert!(f16_to_f32(0x7C00).is_infinite());
+
+		// 1.0, 0.5, -1.0, 2.0 -> clamped to 255, 128, 0, 255
+		let header = DdsxHeader {
+			d3d_format: D3DFMT_A16B16G16R16F,
+			dxt_shift: 0,
+			bits_per_pixel: 64,
+			..dxt1(1, 1, 0, 8)
+		};
+		let raw: Vec<u8> = [0x3C00_u16, 0x3800, 0xBC00, 0x4000]
+			.iter()
+			.flat_map(|h| h.to_le_bytes())
+			.collect();
+		let tex = Texture::from_ddsx(header, &raw).unwrap();
+		assert_eq!(tex.to_rgba().unwrap(), [255, 128, 0, 255]);
 	}
 }
