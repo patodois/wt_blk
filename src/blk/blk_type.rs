@@ -93,7 +93,7 @@ impl BlkType {
 				let in_nm = (offset >> 31) == 1; // Compare first bit to check where to look
 				let offset = i32::MAX as u32 & offset; // Set first byte to 0
 				let res: BlkString = if in_nm {
-					name_map[offset as usize].clone()
+					name_map.get(offset as usize)?.clone()
 				} else {
 					let data_region = &data_region[(offset as usize)..];
 					let end = memchr::memchr(b'\0', data_region)?;
