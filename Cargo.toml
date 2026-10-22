@@ -37,6 +37,7 @@ smallvec = "1.15.1"
 memchr = "2.8"
 num_enum = "0.7.5"
 oozextract = "0.5.5"
+flate2 = "1"
 texture2ddecoder = { version = "0.1.2", optional = true }
 png = { version = "0.18.1", optional = true }
 

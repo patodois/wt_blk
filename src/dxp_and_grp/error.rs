@@ -31,9 +31,12 @@ pub enum DxpGrpError {
 	#[error("Texture is not supported: {0}")]
 	UnsupportedTexture(String),
 
-	#[error("Failed to decompress texture data: {0}")]
+	#[error("Failed to decompress data: {0}")]
 	Decompression(String),
 
 	#[error("Failed to encode texture: {0}")]
 	Encoding(String),
+
+	#[error("Invalid or unsupported model data: {0}")]
+	Model(String),
 }

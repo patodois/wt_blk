@@ -6,10 +6,15 @@ use crate::dxp_and_grp::{
 	grp::parse_grp,
 };
 
+mod cursor;
 pub mod ddsx;
 pub mod dxp;
+pub mod dynmodel;
 pub mod error;
+pub mod geom_node_tree;
 pub mod grp;
+pub mod grp_pack;
+pub mod meshopt;
 
 pub fn parse_either(file: &[u8]) -> Result<Vec<String>, DxpGrpError> {
 	if file.len() < 4 {
@@ -90,5 +95,141 @@ mod test {
 			assert_eq!(&dds[84..88], &entry.header.d3d_format.to_le_bytes());
 			assert_eq!(dds.len(), 128 + tex.data.len());
 		}
+	}
+
+	fn sample_pack() -> Vec<u8> {
+		std::fs::read("./samples/dxp/bf_109a_1.grp").unwrap()
+	}
+
+	#[test]
+	fn grp_pack_resources_come_from_the_name_table() {
+		use crate::dxp_and_grp::grp_pack::GrpPack;
+
+		let file = sample_pack();
+		let pack = GrpPack::parse(&file).unwrap();
+		// The name table also holds names of resources referenced from other packs
+		let table = crate::dxp_and_grp::grp::parse_grp(&file).unwrap();
+		assert_eq!(pack.resources.len(), 5);
+		assert!(pack.resources.iter().all(|r| table.contains(&r.name)));
+	}
+
+	#[test]
+	fn dynmodel_sample() {
+		use crate::dxp_and_grp::{
+			dynmodel::DynModel,
+			geom_node_tree::GeomNodeTree,
+			grp_pack::{GrpPack, class_id},
+		};
+
+		let file = sample_pack();
+		let pack = GrpPack::parse(&file).unwrap();
+		let model = pack.find("bf_109a_1_cockpit", class_id::DYN_MODEL).unwrap();
+		let model = DynModel::parse(pack.data(model)).unwrap();
+		let tree = pack
+			.find("bf_109a_1_cockpit_skeleton", class_id::GEOM_NODE_TREE)
+			.unwrap();
+		let tree = GeomNodeTree::parse(pack.data(tree)).unwrap();
+
+		assert_eq!(model.lods.len(), 1);
+		let lod = &model.lods[0];
+		assert_eq!(lod.rigids.len(), 104);
+		let triangles: usize = lod
+			.rigids
+			.iter()
+			.flat_map(|r| &r.elems)
+			.map(|e| e.triangles)
+			.sum();
+		assert_eq!(triangles, 135_665);
+		assert!(lod.skins.is_empty() && model.skin_vdata.is_empty());
+
+		// Every part is placed by a skeleton node ("@root" is the model origin)
+		for rigid in &lod.rigids {
+			assert!(
+				rigid.node == "@root" || tree.find(&rigid.node).is_some(),
+				"{}",
+				rigid.node
+			);
+		}
+
+		// Decoded vertices are finite, inside a cockpit-sized box, with unit-ish normals
+		for e in lod.rigids.iter().flat_map(|r| &r.elems) {
+			let vdata = &model.vdata[e.vdata];
+			for &i in &vdata.indices[e.first_index..e.first_index + e.triangles * 3] {
+				let v = model.vertex(vdata, i as usize + e.base_vertex).unwrap();
+				assert!(
+					v.pos.iter().all(|x| x.is_finite() && x.abs() < 10.0),
+					"{v:?}"
+				);
+				let len = v.normal.iter().map(|x| x * x).sum::<f32>().sqrt();
+				assert!((0.9..1.1).contains(&len), "{v:?}");
+			}
+		}
+	}
+
+	#[test]
+	fn geom_node_tree_world_matrices_follow_parents() {
+		use crate::dxp_and_grp::{
+			geom_node_tree::GeomNodeTree,
+			grp_pack::{GrpPack, class_id},
+		};
+
+		let file = sample_pack();
+		let pack = GrpPack::parse(&file).unwrap();
+		let tree = pack
+			.find("bf_109a_1_cockpit_skeleton", class_id::GEOM_NODE_TREE)
+			.unwrap();
+		let tree = GeomNodeTree::parse(pack.data(tree)).unwrap();
+		assert_eq!(tree.nodes.len(), 156);
+		assert_eq!(tree.nodes[0].parent, None);
+
+		// Column-major 4x4 product
+		let mul = |a: &[f32; 16], b: &[f32; 16]| {
+			let mut m = [0_f32; 16];
+			for c in 0..4 {
+				for r in 0..4 {
+					m[c * 4 + r] = (0..4).map(|k| a[k * 4 + r] * b[c * 4 + k]).sum();
+				}
+			}
+			m
+		};
+		for (i, node) in tree.nodes.iter().enumerate().skip(1) {
+			let parent = node.parent.unwrap();
+			assert!(parent < i, "nodes are stored parents first");
+			let expected = mul(&tree.nodes[parent].wtm, &node.tm);
+			for (a, b) in expected.iter().zip(&node.wtm) {
+				assert!(
+					(a - b).abs() < 1e-3,
+					"node {} wtm {:?} vs {:?}",
+					node.name,
+					node.wtm,
+					expected
+				);
+			}
+		}
+	}
+
+	#[test]
+	fn truncated_models_fail_without_panicking() {
+		use crate::dxp_and_grp::{
+			dynmodel::DynModel,
+			grp_pack::{GrpPack, class_id},
+		};
+
+		let file = sample_pack();
+		let pack = GrpPack::parse(&file).unwrap();
+		let data = pack.data(pack.find("bf_109a_1_cockpit", class_id::DYN_MODEL).unwrap());
+		// Resources end with alignment padding, so only cut well inside the data
+		for cut in [
+			0,
+			3,
+			20,
+			64,
+			data.len() / 3,
+			data.len() / 2,
+			data.len() * 3 / 4,
+		] {
+			assert!(DynModel::parse(&data[..cut]).is_err(), "cut at {cut}");
+		}
+		assert!(GrpPack::parse(&file[..40]).is_err());
 	}
 }
