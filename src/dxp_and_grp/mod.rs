@@ -222,6 +222,85 @@ mod test {
 		assert!(GeomNodeTree::parse(&res).is_err());
 	}
 
+	fn put_u32(buf: &mut [u8], at: usize, v: u32) {
+		buf[at..at + 4].copy_from_slice(&v.to_le_bytes());
+	}
+
+	#[test]
+	fn huge_table_counts_are_rejected_before_allocating() {
+		use crate::dxp_and_grp::{
+			dxp::DxpPack,
+			dynmodel::DynModel,
+			grp_pack::{GrpPack, class_id},
+		};
+
+		// Counts were used for Vec::with_capacity (and vec![String::new(); n], which writes every
+		// element) before checking that their tables fit in the file: 4G entries meant 100+ GiB
+		let mut grp = vec![0_u8; 0x40];
+		grp[..4].copy_from_slice(b"GRP2");
+		put_u32(&mut grp, 0x10, 0x30);
+		put_u32(&mut grp, 0x14, u32::MAX);
+		assert!(GrpPack::parse(&grp).is_err());
+		put_u32(&mut grp, 0x14, 0);
+		put_u32(&mut grp, 0x20, 0x30);
+		put_u32(&mut grp, 0x24, u32::MAX);
+		assert!(GrpPack::parse(&grp).is_err());
+
+		let mut dxp = vec![0_u8; 0x40];
+		dxp[..4].copy_from_slice(b"DxP2");
+		put_u32(&mut dxp, 0x4, 2);
+		put_u32(&mut dxp, 0xC, 0x30);
+		for table in [0x10, 0x20, 0x30] {
+			put_u32(&mut dxp, table + 4, u32::MAX);
+		}
+		assert!(DxpPack::parse(&dxp).is_err());
+
+		// Vertex data with 4G vertex buffers, then one buffer with 4G channels, zstd packed
+		let model = |vdata: &[u8]| {
+			let block = zstd::bulk::compress(vdata, 0).unwrap();
+			let mut res = Vec::new();
+			for v in [0, u32::MAX, u32::MAX, 1, 0xC000_0000 | 24] {
+				res.extend_from_slice(&v.to_le_bytes());
+			}
+			res.extend_from_slice(&(block.len() as u32 | 1 << 30).to_le_bytes());
+			res.extend_from_slice(&block);
+			res
+		};
+		let mut vdata = vec![0_u8; 24];
+		put_u32(&mut vdata, 16, 24);
+		put_u32(&mut vdata, 20, u32::MAX);
+		assert!(DynModel::parse(&model(&vdata)).is_err());
+		put_u32(&mut vdata, 20, 1);
+		vdata.extend_from_slice(&[0; 32]);
+		put_u32(&mut vdata, 24 + 16, 56);
+		put_u32(&mut vdata, 24 + 20, u32::MAX);
+		assert!(DynModel::parse(&model(&vdata)).is_err());
+
+		// The sample model with each of its other counts raised
+		let file = sample_pack();
+		let pack = GrpPack::parse(&file).unwrap();
+		let data = pack.data(pack.find("bf_109a_1_cockpit", class_id::DYN_MODEL).unwrap());
+		let u32_at = |at: usize| u32::from_le_bytes(data[at..at + 4].try_into().unwrap()) as usize;
+		let lods = 24 + (u32_at(20) & 0x3FFF_FFFF);
+		let names = lods + u32_at(0);
+		let scene = names + 4 + u32_at(names);
+		let mesh = scene + u32_at(lods + u32_at(lods));
+		for (at, what) in [
+			(lods + 4, "LODs"),
+			(names + 4 + 4, "node names"),
+			(scene + 4, "rigids"),
+			(scene + 20, "skins"),
+			(mesh + 4, "mesh elements"),
+		] {
+			let mut patched = data.to_vec();
+			put_u32(&mut patched, at, u32::MAX);
+			if what == "node names" {
+				put_u32(&mut patched, at + 16, u32::MAX);
+			}
+			assert!(DynModel::parse(&patched).is_err(), "{what}");
+		}
+	}
+
 	#[test]
 	fn truncated_models_fail_without_panicking() {
 		use crate::dxp_and_grp::{

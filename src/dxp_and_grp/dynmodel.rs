@@ -26,7 +26,7 @@
 use std::io::Read;
 
 use crate::dxp_and_grp::{
-	cursor::Cursor,
+	cursor::{Cursor, check_table},
 	error::DxpGrpError,
 	meshopt::decode_index_sequence,
 	unpack,
@@ -208,6 +208,7 @@ fn read_vdata(vd: &[u8], payload_start: usize) -> Result<Vec<VData>, DxpGrpError
 	h.skip(16)?; // material table, empty when materials live in dynModelDesc.bin
 	let (tab_ofs, count) = (h.u32()? as usize, h.u32()? as usize);
 	let mut payload = Cursor::at(vd, payload_start)?;
+	check_table(vd, tab_ofs, count, 32)?;
 	let mut out = Vec::with_capacity(count);
 	for i in 0..count {
 		let mut e = Cursor::at(vd, tab_ofs + i * 32)?;
@@ -222,6 +223,7 @@ fn read_vdata(vd: &[u8], payload_start: usize) -> Result<Vec<VData>, DxpGrpError
 		let wide = flags & VDATA_I32 != 0 || (vert_num > 65536 && flags & VDATA_I16 == 0);
 		let idx_count = idx_size / if wide { 4 } else { 2 };
 
+		check_table(vd, decl_ofs, decl_n, 12)?;
 		let mut channels = Vec::with_capacity(decl_n);
 		let mut d = Cursor::at(vd, decl_ofs)?;
 		let mut offset = 0;
@@ -280,6 +282,7 @@ fn read_vdata(vd: &[u8], payload_start: usize) -> Result<Vec<VData>, DxpGrpError
 fn read_mesh(dump: &[u8], at: usize, vdata: &[VData]) -> Result<Vec<Elem>, DxpGrpError> {
 	let mut r = Cursor::at(dump, at)?;
 	let (elems_ofs, count) = (r.u32()? as usize, r.u32()? as usize);
+	check_table(dump, elems_ofs, count, 48)?;
 	let mut elems = Vec::with_capacity(count);
 	for i in 0..count {
 		let mut e = Cursor::at(dump, elems_ofs + i * 48)?;
@@ -343,6 +346,8 @@ impl DynModel {
 		if ids_count != names_count {
 			return Err(model_err("node name map and id table differ in size"));
 		}
+		check_table(names_dump, names_ofs, names_count, 8)?;
+		check_table(names_dump, ids_ofs, ids_count, 2)?;
 		let mut node_names = vec![String::new(); names_count];
 		for i in 0..names_count {
 			let name_ofs = Cursor::at(names_dump, names_ofs + i * 8)?.u64_usize()?;
@@ -361,6 +366,7 @@ impl DynModel {
 
 		let mut lt = Cursor::new(lods_dump);
 		let (lod_ofs, lod_count) = (lt.u32()? as usize, lt.u32()? as usize);
+		check_table(lods_dump, lod_ofs, lod_count, 16)?;
 		let mut lods = Vec::with_capacity(lod_count);
 		let mut skin_counts = Vec::with_capacity(lod_count);
 		for l in 0..lod_count {
@@ -372,6 +378,7 @@ impl DynModel {
 			let (rig_ofs, rig_count) = (sr.u32()? as usize, sr.u32()? as usize);
 			sr.skip(12)?;
 			let skin_count = sr.u32()? as usize;
+			check_table(scene, rig_ofs, rig_count, 32)?;
 			let mut rigids = Vec::with_capacity(rig_count);
 			for i in 0..rig_count {
 				let mut ro = Cursor::at(scene, rig_ofs + i * 32)?;
@@ -386,7 +393,8 @@ impl DynModel {
 			lods.push(Lod {
 				range,
 				rigids,
-				skins: Vec::with_capacity(skin_count),
+				// Skins are read later, from a compressed section
+				skins: Vec::new(),
 			});
 			skin_counts.push(skin_count);
 		}

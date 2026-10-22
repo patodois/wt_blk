@@ -83,3 +83,22 @@ impl<'a> Cursor<'a> {
 		Ok(s)
 	}
 }
+
+/// Checks that a table of `count` records of `size` bytes at `ofs` lies inside `buf`, before a count
+/// read from a file sizes an allocation or a loop. Empty tables may point anywhere
+pub(crate) fn check_table(
+	buf: &[u8],
+	ofs: usize,
+	count: usize,
+	size: usize,
+) -> Result<(), DxpGrpError> {
+	let end = count.checked_mul(size).and_then(|n| n.checked_add(ofs));
+	match end {
+		_ if count == 0 => Ok(()),
+		Some(end) if end <= buf.len() => Ok(()),
+		_ => Err(IndexingFileOutOfBounds {
+			current_ptr: end.unwrap_or(usize::MAX),
+			file_size:   buf.len(),
+		}),
+	}
+}

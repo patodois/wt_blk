@@ -11,7 +11,10 @@
 //!
 //! A resource's data runs from its offset to the next resource's offset, or to the end of the file.
 
-use crate::dxp_and_grp::{cursor::Cursor, error::DxpGrpError};
+use crate::dxp_and_grp::{
+	cursor::{Cursor, check_table},
+	error::DxpGrpError,
+};
 
 /// Class ids of the resource kinds this crate can read (`dag_stdGameResId.h`)
 pub mod class_id {
@@ -57,6 +60,8 @@ impl<'a> GrpPack<'a> {
 		};
 		let (names_ofs, names_count) = tab(0x10)?;
 		let (res_ofs, res_count) = tab(0x20)?;
+		check_table(file, names_ofs, names_count, 4)?;
+		check_table(file, res_ofs, res_count, 12)?;
 
 		let mut names = Vec::with_capacity(names_count);
 		let mut nr = Cursor::at(file, names_ofs)?;

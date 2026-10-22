@@ -3,6 +3,7 @@ use std::{ffi::CStr, mem::size_of};
 use crate::{
 	blk::util::bytes_to_offset,
 	dxp_and_grp::{
+		cursor::check_table,
 		ddsx::{DdsxHeader, Texture},
 		dxp::DxpGrpError::{FileTooShort, InvalidHeader},
 		error::{DxpGrpError, DxpGrpError::IndexingFileOutOfBounds},
@@ -113,6 +114,10 @@ impl<'a> DxpPack<'a> {
 				"inconsistent DXP tables: {count} names, {headers_count} headers, {records_count} records"
 			)));
 		}
+
+		check_table(dump, names_ofs, count, 8)?;
+		check_table(dump, headers_ofs, count, DdsxHeader::SIZE)?;
+		check_table(dump, records_ofs, count, 24)?;
 
 		let mut entries = Vec::with_capacity(count);
 		for i in 0..count {
