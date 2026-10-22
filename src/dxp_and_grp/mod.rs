@@ -6,6 +6,7 @@ use crate::dxp_and_grp::{
 	grp::parse_grp,
 };
 
+pub mod ddsx;
 pub mod dxp;
 pub mod error;
 pub mod grp;
@@ -70,5 +71,24 @@ mod test {
 			.to_vec(),
 			out.iter().map(|e| e.as_str()).collect::<Vec<_>>()
 		)
+	}
+
+	#[test]
+	fn dxp_pack_decodes_oodle_textures() {
+		use crate::dxp_and_grp::{dxp::DxpPack, parse_dxp};
+
+		let file = std::fs::read("./samples/dxp/hq_tex_water_garbage_piles.dxp.bin").unwrap();
+		let pack = DxpPack::parse(&file).unwrap();
+		let names: Vec<_> = pack.entries.iter().map(|e| e.name.clone()).collect();
+		assert_eq!(names, parse_dxp(&file).unwrap());
+
+		for (i, entry) in pack.entries.iter().enumerate() {
+			let tex = pack.texture(i).unwrap();
+			assert_eq!(tex.data.len(), entry.header.mem_size as usize);
+			let dds = tex.to_dds().unwrap();
+			assert_eq!(&dds[..4], b"DDS ");
+			assert_eq!(&dds[84..88], &entry.header.d3d_format.to_le_bytes());
+			assert_eq!(dds.len(), 128 + tex.data.len());
+		}
 	}
 }

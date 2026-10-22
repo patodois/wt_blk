@@ -27,4 +27,13 @@ pub enum DxpGrpError {
 
 	#[error(transparent)]
 	IoError(#[from] std::io::Error),
+
+	#[error("Texture is not supported: {0}")]
+	UnsupportedTexture(String),
+
+	#[error("Failed to decompress texture data: {0}")]
+	Decompression(String),
+
+	#[error("Failed to encode texture: {0}")]
+	Encoding(String),
 }

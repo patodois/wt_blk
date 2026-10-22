@@ -36,6 +36,9 @@ foldhash = "0.2.0"
 smallvec = "1.15.1"
 memchr = "2.8"
 num_enum = "0.7.5"
+oozextract = "0.5.5"
+texture2ddecoder = { version = "0.1.2", optional = true }
+png = { version = "0.18.1", optional = true }
 
 [profile.test]
 #opt-level = 3
@@ -57,6 +60,8 @@ pretty_assertions = "^1.4"
 divan = "^0.1.17"
 
 [features]
+# Decoding block-compressed textures to RGBA / PNG
+png = ["dep:texture2ddecoder", "dep:png"]
 performance_stamp = []
 instrument_binary_blk = []
 
