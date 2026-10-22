@@ -12,7 +12,7 @@
 //! A resource's data runs from its offset to the next resource's offset, or to the end of the file.
 
 use crate::dxp_and_grp::{
-	cursor::{Cursor, check_table},
+	cursor::{Cursor, NameBudget, check_table},
 	error::DxpGrpError,
 };
 
@@ -63,6 +63,7 @@ impl<'a> GrpPack<'a> {
 		check_table(file, names_ofs, names_count, 4)?;
 		check_table(file, res_ofs, res_count, 12)?;
 
+		let budget = NameBudget::new(file);
 		let mut names = Vec::with_capacity(names_count);
 		let mut nr = Cursor::at(file, names_ofs)?;
 		for _ in 0..names_count {
@@ -70,10 +71,11 @@ impl<'a> GrpPack<'a> {
 			names.push(if ofs < 0 {
 				String::new()
 			} else {
-				Cursor::at(file, ofs as usize)?.cstr()?
+				budget.take(Cursor::at(file, ofs as usize)?.cstr()?)?
 			});
 		}
 
+		let copies = NameBudget::new(file);
 		let mut raw = Vec::with_capacity(res_count);
 		let mut rr = Cursor::at(file, res_ofs)?;
 		for _ in 0..res_count {
@@ -84,6 +86,7 @@ impl<'a> GrpPack<'a> {
 			let name = names.get(name_id).cloned().ok_or_else(|| {
 				DxpGrpError::Model(format!("resource name id {name_id} out of range"))
 			})?;
+			let name = copies.take(name)?;
 			raw.push((name, class_id, offset));
 		}
 

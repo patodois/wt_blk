@@ -39,4 +39,7 @@ pub enum DxpGrpError {
 
 	#[error("Invalid or unsupported model data: {0}")]
 	Model(String),
+
+	#[error("Names add up to more than the {size} bytes they are stored in")]
+	NamesTooLong { size: usize },
 }

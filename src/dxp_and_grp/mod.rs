@@ -302,6 +302,99 @@ mod test {
 	}
 
 	#[test]
+	fn names_are_not_copied_over_and_over() {
+		use crate::dxp_and_grp::{dxp::DxpPack, dynmodel::DynModel, grp_pack::GrpPack};
+
+		// Tables of names whose entries all point at one long string: every entry used to copy it,
+		// so memory grew with the square of the input size
+		let long = [b'a'; 1000];
+
+		let mut grp = vec![0_u8; 0x40];
+		grp[..4].copy_from_slice(b"GRP2");
+		put_u32(&mut grp, 0x10, 0x40);
+		put_u32(&mut grp, 0x14, 8);
+		for _ in 0..8 {
+			grp.extend_from_slice(&0x60_u32.to_le_bytes());
+		}
+		grp.extend_from_slice(&long);
+		grp.push(0);
+		assert!(GrpPack::parse(&grp).is_err());
+		// One name, given to many resources
+		put_u32(&mut grp, 0x14, 1);
+		let res_ofs = grp.len() as u32;
+		put_u32(&mut grp, 0x20, res_ofs);
+		put_u32(&mut grp, 0x24, 8);
+		let end = grp.len() as u32 + 8 * 12;
+		for _ in 0..8 {
+			for v in [0, end, 0] {
+				grp.extend_from_slice(&v.to_le_bytes());
+			}
+		}
+		assert!(GrpPack::parse(&grp).is_err());
+		put_u32(&mut grp, 0x24, 1);
+		assert_eq!(GrpPack::parse(&grp).unwrap().resources.len(), 1);
+
+		// Four textures with the same 1000-byte name
+		let mut dump = vec![0_u8; 0x30];
+		for (table, ofs) in [(0x00, 0x30), (0x10, 0x50), (0x20, 0xD0)] {
+			put_u32(&mut dump, table, ofs);
+			put_u32(&mut dump, table + 4, 4);
+		}
+		for _ in 0..4 {
+			dump.extend_from_slice(&0x130_u64.to_le_bytes());
+		}
+		for _ in 0..4 {
+			dump.extend_from_slice(b"DDSx");
+			dump.extend_from_slice(&[0; 28]);
+		}
+		dump.extend_from_slice(&[0; 4 * 24]);
+		dump.extend_from_slice(&long);
+		dump.push(0);
+		let mut dxp = b"DxP2".to_vec();
+		for v in [2, 4, dump.len() as u32] {
+			dxp.extend_from_slice(&u32::to_le_bytes(v));
+		}
+		dxp.extend_from_slice(&dump);
+		assert!(DxpPack::parse(&dxp).is_err());
+
+		// A model with one long node name and 40 rigid parts placed by that node
+		let model = |rigids: usize| {
+			let mut res = Vec::new();
+			let put = |res: &mut Vec<u8>, values: &[u32]| {
+				for v in values {
+					res.extend_from_slice(&v.to_le_bytes());
+				}
+			};
+			// No vertex buffers, stored
+			put(&mut res, &[0x58, u32::MAX, u32::MAX, 0, 24]);
+			put(&mut res, &[0, 0, 0, 0, 24, 0]);
+			// LOD table at 0x48 in the LODs dump, then the one LOD's scene size
+			let scene_size = 24 + 32 * rigids as u32;
+			let mut lods = [0_u32; 0x58 / 4];
+			lods[..2].copy_from_slice(&[0x48, 1]);
+			lods[0x48 / 4] = scene_size;
+			put(&mut res, &lods);
+			// Node names: one name at 34, node id 0
+			put(&mut res, &[34 + 1001, 24, 1, 0, 0, 32, 1, 34, 0, 0]);
+			res.truncate(res.len() - 2);
+			res.extend_from_slice(&long);
+			res.push(0);
+			// Scene: rigids at 24, each with an 8-byte empty mesh
+			put(&mut res, &[24, rigids as u32, 0, 0, 0, 0]);
+			for _ in 0..rigids {
+				put(&mut res, &[8, 0, 0, 0, 0, 0, 0, 0]);
+			}
+			for _ in 0..rigids {
+				put(&mut res, &[0, 0]);
+			}
+			res
+		};
+		let parsed = DynModel::parse(&model(1)).unwrap();
+		assert_eq!(parsed.lods[0].rigids[0].node.len(), 1000);
+		assert!(DynModel::parse(&model(40)).is_err());
+	}
+
+	#[test]
 	fn truncated_models_fail_without_panicking() {
 		use crate::dxp_and_grp::{
 			dynmodel::DynModel,

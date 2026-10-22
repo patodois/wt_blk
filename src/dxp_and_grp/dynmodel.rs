@@ -26,7 +26,7 @@
 use std::io::Read;
 
 use crate::dxp_and_grp::{
-	cursor::{Cursor, check_table},
+	cursor::{Cursor, NameBudget, check_table},
 	error::DxpGrpError,
 	meshopt::decode_index_sequence,
 	unpack,
@@ -348,6 +348,7 @@ impl DynModel {
 		}
 		check_table(names_dump, names_ofs, names_count, 8)?;
 		check_table(names_dump, ids_ofs, ids_count, 2)?;
+		let budget = NameBudget::new(names_dump);
 		let mut node_names = vec![String::new(); names_count];
 		for i in 0..names_count {
 			let name_ofs = Cursor::at(names_dump, names_ofs + i * 8)?.u64_usize()?;
@@ -355,13 +356,16 @@ impl DynModel {
 			*node_names
 				.get_mut(id)
 				.ok_or_else(|| model_err("node id out of range"))? =
-				Cursor::at(names_dump, name_ofs)?.cstr()?;
+				budget.take(Cursor::at(names_dump, name_ofs)?.cstr()?)?;
 		}
+		// Rigids and skins take copies of the names
+		let copies = NameBudget::new(res);
 		let node_name = |id: usize| {
 			node_names
 				.get(id)
 				.cloned()
 				.ok_or_else(|| model_err(format!("node id {id} out of range")))
+				.and_then(|name| copies.take(name))
 		};
 
 		let mut lt = Cursor::new(lods_dump);

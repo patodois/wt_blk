@@ -1,3 +1,5 @@
+use std::cell::Cell;
+
 use crate::dxp_and_grp::error::{DxpGrpError, DxpGrpError::IndexingFileOutOfBounds};
 
 /// Bounds-checked little-endian reader over a byte slice
@@ -100,5 +102,33 @@ pub(crate) fn check_table(
 			current_ptr: end.unwrap_or(usize::MAX),
 			file_size:   buf.len(),
 		}),
+	}
+}
+
+/// Limits the bytes of names copied out of a buffer to the buffer's size. Files store each name once
+/// and refer to it a few times, but a hostile one could point every entry of a table at one long
+/// string, copying it over and over
+pub(crate) struct NameBudget {
+	size: usize,
+	left: Cell<usize>,
+}
+
+impl NameBudget {
+	pub(crate) fn new(buf: &[u8]) -> Self {
+		Self {
+			size: buf.len(),
+			left: Cell::new(buf.len()),
+		}
+	}
+
+	/// Accounts for one copy of `name`
+	pub(crate) fn take(&self, name: String) -> Result<String, DxpGrpError> {
+		let left = self
+			.left
+			.get()
+			.checked_sub(name.len())
+			.ok_or(DxpGrpError::NamesTooLong { size: self.size })?;
+		self.left.set(left);
+		Ok(name)
 	}
 }

@@ -3,7 +3,7 @@ use std::{ffi::CStr, mem::size_of};
 use crate::{
 	blk::util::bytes_to_offset,
 	dxp_and_grp::{
-		cursor::check_table,
+		cursor::{NameBudget, check_table},
 		ddsx::{DdsxHeader, Texture},
 		dxp::DxpGrpError::{FileTooShort, InvalidHeader},
 		error::{DxpGrpError, DxpGrpError::IndexingFileOutOfBounds},
@@ -119,12 +119,15 @@ impl<'a> DxpPack<'a> {
 		check_table(dump, headers_ofs, count, DdsxHeader::SIZE)?;
 		check_table(dump, records_ofs, count, 24)?;
 
+		let budget = NameBudget::new(dump);
 		let mut entries = Vec::with_capacity(count);
 		for i in 0..count {
 			let name_ofs = u32_at(dump, names_ofs + i * 8)?;
-			let name = CStr::from_bytes_until_nul(dump.get(name_ofs..).ok_or(oob(name_ofs))?)?
-				.to_str()?
-				.to_owned();
+			let name = budget.take(
+				CStr::from_bytes_until_nul(dump.get(name_ofs..).ok_or(oob(name_ofs))?)?
+					.to_str()?
+					.to_owned(),
+			)?;
 			let header_ofs = headers_ofs + i * DdsxHeader::SIZE;
 			let header = DdsxHeader::parse(dump.get(header_ofs..).ok_or(oob(header_ofs))?)?;
 			let record = records_ofs + i * 24;

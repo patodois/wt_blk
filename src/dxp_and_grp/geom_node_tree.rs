@@ -6,7 +6,7 @@
 //! pointer, all relative to the start of the dump.
 
 use crate::dxp_and_grp::{
-	cursor::Cursor,
+	cursor::{Cursor, NameBudget},
 	dynmodel::{read_block, unpack_block},
 	error::DxpGrpError,
 };
@@ -44,6 +44,7 @@ impl GeomNodeTree {
 			return Err(DxpGrpError::Model("node tree data is truncated".to_owned()));
 		}
 
+		let budget = NameBudget::new(&data);
 		let mut nodes = Vec::with_capacity(count);
 		for i in 0..count {
 			let mut n = Cursor::at(&data, i * NODE_SIZE)?;
@@ -71,7 +72,7 @@ impl GeomNodeTree {
 				)));
 			};
 			nodes.push(GeomNode {
-				name: Cursor::at(&data, name_ofs)?.cstr()?,
+				name: budget.take(Cursor::at(&data, name_ofs)?.cstr()?)?,
 				parent,
 				tm,
 				wtm,
@@ -118,5 +119,20 @@ mod test {
 		// from them never ends
 		assert!(GeomNodeTree::parse(&tree(&[0, NODE_SIZE])).is_err());
 		assert!(GeomNodeTree::parse(&tree(&[0, 2 * NODE_SIZE, NODE_SIZE])).is_err());
+	}
+
+	#[test]
+	fn names_are_not_copied_over_and_over() {
+		// Four nodes named by one 1000-byte string: every node used to copy it, so memory grew with
+		// the square of the input size
+		let mut res = tree(&[0, 0, 0, 0]);
+		let name = res.len() - 8;
+		res.extend_from_slice(&[b'a'; 1000]);
+		res.push(0);
+		for i in 0..4 {
+			let at = 8 + i * NODE_SIZE + 152;
+			res[at..at + 8].copy_from_slice(&(name as u64).to_le_bytes());
+		}
+		assert!(GeomNodeTree::parse(&res).is_err());
 	}
 }
