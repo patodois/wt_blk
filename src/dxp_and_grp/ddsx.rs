@@ -432,8 +432,11 @@ impl DdsFormat {
 				dxgi_format: Some(DXGI_FORMAT_BC7_UNORM),
 				..four_cc(u32::from_le_bytes(*b"DX10"))
 			},
-			// DXTn / ATIn FourCCs and float formats (D3DFMT_R16F, D3DFMT_A16B16G16R16F, ...) are valid as-is
-			f if h.dxt_shift != 0 || f > 0xFF || h.bits_per_pixel != 0 => four_cc(f),
+			// Text FourCCs (DXTn, ATIn) are valid as-is
+			f if f > 0xFF => four_cc(f),
+			// So are the numeric codes DDS readers accept in the FourCC field:
+			// A16B16G16R16, Q16W16V16U16, R16F, G16R16F, A16B16G16R16F, R32F, G32R32F, A32B32G32R32F
+			f @ (36 | 110 | 111 | 112 | 113 | 114 | 115 | 116) => four_cc(f),
 			_ => {
 				return Err(DxpGrpError::UnsupportedTexture(format!(
 					"pixel format {}",
@@ -642,6 +645,18 @@ mod test {
 		assert!(Texture::from_ddsx(empty, &[]).is_err());
 		assert!(Texture::from_ddsx(dxt1(8, 1, FLG_NEED_PAIRED_BASETEX, 32), &[0; 32]).is_err());
 		assert!(Texture::from_ddsx(dxt1(8, 2, 0, 40), &[0; 39]).is_err());
+	}
+
+	#[test]
+	fn unknown_numeric_formats_are_rejected() {
+		let header = DdsxHeader {
+			d3d_format: 23, // D3DFMT_R5G6B5, not representable without bit masks here
+			dxt_shift: 0,
+			bits_per_pixel: 16,
+			..dxt1(1, 1, 0, 2)
+		};
+		let tex = Texture::from_ddsx(header, &[0; 2]).unwrap();
+		assert!(tex.to_dds().is_err());
 	}
 
 	#[test]
