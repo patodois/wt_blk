@@ -17,7 +17,8 @@ pub fn decode_index_sequence(
 	wide: bool,
 ) -> Result<Vec<u32>, DxpGrpError> {
 	let err = |what: &str| DxpGrpError::Model(format!("packed index buffer: {what}"));
-	if data.len() < 1 + count + 4 {
+	// At least one byte per index, between the header byte and the tail
+	if data.len() < 1 + 4 || data.len() - (1 + 4) < count {
 		return Err(err("too short"));
 	}
 	if data[0] & 0xF0 != SEQUENCE_HEADER || data[0] & 0x0F > MAX_VERSION {
@@ -112,5 +113,15 @@ mod test {
 		let mut bad_header = encoded.clone();
 		bad_header[0] = 0xE1;
 		assert!(decode_index_sequence(&bad_header, 3, true).is_err());
+	}
+
+	#[test]
+	fn huge_counts_are_rejected() {
+		// The length check used to overflow on `1 + count + 4`
+		let encoded = encode(&[0, 1, 2]);
+		for count in [usize::MAX, usize::MAX - 4, usize::MAX / 2] {
+			assert!(decode_index_sequence(&encoded, count, true).is_err());
+		}
+		assert!(decode_index_sequence(&[], 0, true).is_err());
 	}
 }
