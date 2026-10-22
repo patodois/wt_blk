@@ -142,9 +142,14 @@ impl DdsxHeader {
 		}
 	}
 
+	/// Size of `dim` at mip `level`; headers can claim up to 255 levels, past the 1x1 mip
+	fn mip_dim(dim: u16, level: u32) -> usize {
+		u32::from(dim).checked_shr(level).unwrap_or(0).max(1) as usize
+	}
+
 	fn surface_size(&self, level: u32) -> usize {
-		let w = (u32::from(self.width) >> level).max(1) as usize;
-		let h = (u32::from(self.height) >> level).max(1) as usize;
+		let w = Self::mip_dim(self.width, level);
+		let h = Self::mip_dim(self.height, level);
 		if self.dxt_shift == 0 {
 			w * h * usize::from(self.bits_per_pixel) / 8
 		} else {
@@ -154,7 +159,7 @@ impl DdsxHeader {
 
 	fn level_size(&self, level: u32) -> usize {
 		let depth = if self.is_volume() {
-			(u32::from(self.depth) >> level).max(1) as usize
+			Self::mip_dim(self.depth, level)
 		} else {
 			1
 		};
@@ -633,6 +638,19 @@ mod test {
 		assert_eq!(tex.mip_levels(), 1);
 		let dds = tex.to_dds().unwrap();
 		assert_eq!(u32::from_le_bytes(dds[28..32].try_into().unwrap()), 1);
+	}
+
+	#[test]
+	fn levels_past_the_smallest_mip() {
+		// 40 levels: 32 bytes for the 8x8 mip, then 8 bytes for every 4x4-or-smaller block level.
+		// Shifting the width by 32 or more used to overflow
+		let tex = Texture::from_ddsx(dxt1(8, 40, FLG_REV_MIP_ORDER, 344), &[0; 344]).unwrap();
+		assert_eq!(tex.data.len(), 344);
+		let volume = DdsxHeader {
+			depth: 2,
+			..dxt1(8, 255, FLG_VOLTEX, 0)
+		};
+		assert!(Texture::from_ddsx(volume, &[0; 16]).is_err());
 	}
 
 	#[test]
