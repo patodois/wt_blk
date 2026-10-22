@@ -23,6 +23,7 @@ pub struct GeomNode {
 	pub wtm:    [f32; 16],
 }
 
+/// Nodes are stored parents first: a node's parent has a lower index
 #[derive(Debug, Clone, PartialEq)]
 pub struct GeomNodeTree {
 	pub nodes: Vec<GeomNode>,
@@ -61,7 +62,8 @@ impl GeomNodeTree {
 			// Node 0 is the root; its parent pointer is null, which reads like an offset of 0
 			let parent = if i == 0 {
 				None
-			} else if parent_ofs % NODE_SIZE == 0 && parent_ofs / NODE_SIZE < count {
+			} else if parent_ofs % NODE_SIZE == 0 && parent_ofs / NODE_SIZE < i {
+				// Parents come first, as world matrices are computed in node order; no cycles
 				Some(parent_ofs / NODE_SIZE)
 			} else {
 				return Err(DxpGrpError::Model(format!(
@@ -80,5 +82,41 @@ impl GeomNodeTree {
 
 	pub fn find(&self, name: &str) -> Option<&GeomNode> {
 		self.nodes.iter().find(|n| n.name == name)
+	}
+}
+
+#[cfg(test)]
+mod test {
+	use super::*;
+
+	/// Uncompressed tree whose node `i` has the parent pointer `parents[i]`
+	fn tree(parents: &[usize]) -> Vec<u8> {
+		let names = parents.len() * NODE_SIZE;
+		let mut dump = vec![0_u8; names];
+		for (i, &parent) in parents.iter().enumerate() {
+			let node = &mut dump[i * NODE_SIZE..];
+			node[144..152].copy_from_slice(&(parent as u64).to_le_bytes());
+			node[152..160].copy_from_slice(&((names + i * 2) as u64).to_le_bytes());
+			dump.extend_from_slice(&[b'a' + i as u8, 0]);
+		}
+		let mut res = (dump.len() as u32).to_le_bytes().to_vec();
+		res.extend_from_slice(&(parents.len() as u32).to_le_bytes());
+		res.extend_from_slice(&dump);
+		res
+	}
+
+	#[test]
+	fn parents_come_first() {
+		let nodes = GeomNodeTree::parse(&tree(&[0, 0, NODE_SIZE]))
+			.unwrap()
+			.nodes;
+		let parents: Vec<_> = nodes.iter().map(|n| n.parent).collect();
+		assert_eq!(parents, [None, Some(0), Some(1)]);
+		assert_eq!(nodes[2].name, "c");
+
+		// A node that is its own parent, and two nodes that are each other's: walking up to the root
+		// from them never ends
+		assert!(GeomNodeTree::parse(&tree(&[0, NODE_SIZE])).is_err());
+		assert!(GeomNodeTree::parse(&tree(&[0, 2 * NODE_SIZE, NODE_SIZE])).is_err());
 	}
 }
