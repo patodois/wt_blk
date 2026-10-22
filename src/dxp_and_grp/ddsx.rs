@@ -41,7 +41,9 @@ const D3DFMT_A8R8G8B8: u32 = 21;
 const D3DFMT_A8: u32 = 28;
 const D3DFMT_A8B8G8R8: u32 = 32;
 const D3DFMT_L8: u32 = 50;
+#[cfg(feature = "png")]
 const D3DFMT_R16F: u32 = 111;
+#[cfg(feature = "png")]
 const D3DFMT_A16B16G16R16F: u32 = 113;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
