@@ -419,9 +419,9 @@ impl DynModel {
 
 	/// Decodes vertex `index` of one of this model's vertex buffers (rigid or skinned)
 	pub fn vertex(&self, vdata: &VData, index: usize) -> Result<Vertex, DxpGrpError> {
-		let v = vdata
-			.vertices
-			.get(index * vdata.stride..(index + 1) * vdata.stride)
+		let v = index
+			.checked_mul(vdata.stride)
+			.and_then(|start| vdata.vertices.get(start..start.checked_add(vdata.stride)?))
 			.ok_or_else(|| model_err(format!("vertex {index} out of range")))?;
 		let i16_at = |o: usize| f32::from(i16::from_le_bytes([v[o], v[o + 1]]));
 		let f32_at = |o: usize| f32::from_le_bytes([v[o], v[o + 1], v[o + 2], v[o + 3]]);
@@ -516,4 +516,36 @@ fn read_skins(
 		}
 	}
 	Ok(vdata)
+}
+
+#[cfg(test)]
+mod test {
+	use super::*;
+
+	#[test]
+	fn vertex_index_out_of_range() {
+		let model = DynModel {
+			vdata:      Vec::new(),
+			skin_vdata: Vec::new(),
+			pos_offset: [0.0; 3],
+			pos_scale:  [1.0; 3],
+			lods:       Vec::new(),
+		};
+		let vdata = VData {
+			stride:   8,
+			vertices: vec![1; 16],
+			indices:  Vec::new(),
+			channels: vec![Channel {
+				ty:     FLOAT2,
+				usage:  TEXCOORD,
+				index:  0,
+				offset: 0,
+			}],
+		};
+		assert!(model.vertex(&vdata, 1).is_ok());
+		assert!(model.vertex(&vdata, 2).is_err());
+		// `index * stride` overflowed: a panic in debug builds, and vertex 0 in release builds
+		assert!(model.vertex(&vdata, 1 << 61).is_err());
+		assert!(model.vertex(&vdata, usize::MAX).is_err());
+	}
 }
