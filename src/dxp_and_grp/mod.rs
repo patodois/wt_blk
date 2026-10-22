@@ -395,6 +395,53 @@ mod test {
 	}
 
 	#[test]
+	fn sizes_do_not_overflow_on_32_bit_targets() {
+		use crate::dxp_and_grp::{
+			dxp::DxpPack,
+			dynmodel::DynModel,
+			geom_node_tree::GeomNodeTree,
+			grp_pack::{GrpPack, class_id},
+		};
+
+		// Where usize is 32 bits (wasm32), these sizes overflowed: a panic in debug builds, and in
+		// release builds checks that passed on the wrapped values
+
+		// 0x7FFFFFFF nodes of 160 bytes
+		let mut tree = vec![0_u8; 8 + 0x100];
+		put_u32(&mut tree, 0, 0x100);
+		put_u32(&mut tree, 4, 0x7FFF_FFFF);
+		assert!(GeomNodeTree::parse(&tree).is_err());
+
+		// A table dump of 0xFFFFFFFF bytes after the 16-byte header
+		let mut dxp = vec![0_u8; 0x40];
+		dxp[..4].copy_from_slice(b"DxP2");
+		put_u32(&mut dxp, 0x4, 2);
+		put_u32(&mut dxp, 0xC, u32::MAX);
+		assert!(DxpPack::parse(&dxp).is_err());
+
+		// Mesh elements of 0x55555556 triangles (0x100000002 indices) and with a base vertex of
+		// 0xFFFFFFFF
+		let file = sample_pack();
+		let pack = GrpPack::parse(&file).unwrap();
+		let data = pack.data(pack.find("bf_109a_1_cockpit", class_id::DYN_MODEL).unwrap());
+		let u32_at = |at: usize| u32::from_le_bytes(data[at..at + 4].try_into().unwrap()) as usize;
+		let lods = 24 + (u32_at(20) & 0x3FFF_FFFF);
+		let names = lods + u32_at(0);
+		let scene = names + 4 + u32_at(names);
+		// The first rigid's mesh lists no elements in its main table, the second's lists one
+		let mesh = scene + u32_at(lods + u32_at(lods));
+		let mesh = mesh + u32_at(scene + u32_at(scene));
+		assert_eq!(u32_at(mesh + 4), 1);
+		let elem = mesh + u32_at(mesh);
+		for (field, value) in [(40, 0x5555_5556), (44, u32::MAX)] {
+			let mut patched = data.to_vec();
+			put_u32(&mut patched, elem + 36, 0);
+			put_u32(&mut patched, elem + field, value);
+			assert!(DynModel::parse(&patched).is_err());
+		}
+	}
+
+	#[test]
 	fn truncated_models_fail_without_panicking() {
 		use crate::dxp_and_grp::{
 			dynmodel::DynModel,

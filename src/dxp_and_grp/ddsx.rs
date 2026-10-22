@@ -143,22 +143,24 @@ impl DdsxHeader {
 	}
 
 	/// Size of `dim` at mip `level`; headers can claim up to 255 levels, past the 1x1 mip
-	fn mip_dim(dim: u16, level: u32) -> usize {
-		u32::from(dim).checked_shr(level).unwrap_or(0).max(1) as usize
+	fn mip_dim(dim: u16, level: u32) -> u64 {
+		u64::from(dim).checked_shr(level).unwrap_or(0).max(1)
 	}
 
-	fn surface_size(&self, level: u32) -> usize {
+	/// Sizes are u64, which holds anything a header can describe (under 2^64 bytes), while usize is
+	/// 32 bits on wasm32
+	fn surface_size(&self, level: u32) -> u64 {
 		let w = Self::mip_dim(self.width, level);
 		let h = Self::mip_dim(self.height, level);
 		if self.dxt_shift == 0 {
-			w * h * usize::from(self.bits_per_pixel) / 8
+			w * h * u64::from(self.bits_per_pixel) / 8
 		} else {
 			// Partial blocks at the edges of sizes that are not a multiple of 4 are stored whole
 			(w.div_ceil(4) * h.div_ceil(4)) << self.dxt_shift
 		}
 	}
 
-	fn level_size(&self, level: u32) -> usize {
+	fn level_size(&self, level: u32) -> u64 {
 		let depth = if self.is_volume() {
 			Self::mip_dim(self.depth, level)
 		} else {
@@ -176,14 +178,14 @@ impl DdsxHeader {
 		}
 	}
 
-	fn faces(&self) -> usize {
+	fn faces(&self) -> u64 {
 		if self.is_cubemap() { 6 } else { 1 }
 	}
 
-	fn expected_size(&self) -> usize {
+	fn expected_size(&self) -> u64 {
 		(0..self.stored_levels())
 			.map(|l| self.level_size(l))
-			.sum::<usize>()
+			.sum::<u64>()
 			* self.faces()
 	}
 }
@@ -231,14 +233,14 @@ impl Texture {
 		};
 
 		let expected = header.expected_size();
-		if data.len() < expected {
+		if (data.len() as u64) < expected {
 			return Err(DxpGrpError::Decompression(format!(
 				"{} bytes of surface data, but the header describes {expected}",
 				data.len()
 			)));
 		}
 		// Textures with generated mips carry a few trailing bytes after the top mip
-		data.truncate(expected);
+		data.truncate(expected as usize);
 
 		if header.flags & FLG_REV_MIP_ORDER != 0 && !header.generates_mips() {
 			data = forward_mips(&header, &data);
@@ -347,20 +349,23 @@ fn packed_slice<'a>(header: &DdsxHeader, raw: &'a [u8]) -> Result<&'a [u8], DxpG
 /// Reorders mips stored smallest-first into DDS order, see `ddsx_forward_mips_inplace` in Dagor
 fn forward_mips(header: &DdsxHeader, data: &[u8]) -> Vec<u8> {
 	let levels = header.stored_levels();
+	// Mips add up to the data, as Texture::from_ddsx checked
+	let surface_size = |level| header.surface_size(level) as usize;
+	let level_size = |level| header.level_size(level) as usize;
 	let mut out = vec![0_u8; data.len()];
 	if header.is_cubemap() {
 		// Stored: for each mip from smallest, all six faces. DDS wants each face with its full mip chain
 		let mip_offsets: Vec<usize> = (0..levels)
 			.scan(0, |acc, l| {
 				let ofs = *acc;
-				*acc += header.surface_size(l);
+				*acc += surface_size(l);
 				Some(ofs)
 			})
 			.collect();
-		let face_size: usize = (0..levels).map(|l| header.surface_size(l)).sum();
+		let face_size: usize = (0..levels).map(surface_size).sum();
 		let mut src = 0;
 		for level in (0..levels).rev() {
-			let size = header.surface_size(level);
+			let size = surface_size(level);
 			for face in 0..6 {
 				let dst = face_size * face + mip_offsets[level as usize];
 				out[dst..dst + size].copy_from_slice(&data[src..src + size]);
@@ -371,7 +376,7 @@ fn forward_mips(header: &DdsxHeader, data: &[u8]) -> Vec<u8> {
 		let mut src = 0;
 		let mut dst_end = out.len();
 		for level in (0..levels).rev() {
-			let size = header.level_size(level);
+			let size = level_size(level);
 			out[dst_end - size..dst_end].copy_from_slice(&data[src..src + size]);
 			src += size;
 			dst_end -= size;
@@ -453,10 +458,10 @@ impl Texture {
 			))
 		})?;
 		let size = self.header.surface_size(0);
-		let top = self
-			.data
-			.get(..size)
-			.filter(|top| top.len() == needed)
+		let top = usize::try_from(size)
+			.ok()
+			.filter(|_| size == needed)
+			.and_then(|size| self.data.get(..size))
 			.ok_or_else(|| {
 				DxpGrpError::UnsupportedTexture(format!(
 					"{w}x{h} {} with a top mip of {size} bytes",
@@ -475,7 +480,10 @@ impl Texture {
 				_ => None,
 			};
 
-		let mut rgba = Vec::with_capacity(w * h * 4);
+		let rgba_size = (w * h)
+			.checked_mul(4)
+			.ok_or_else(|| DxpGrpError::UnsupportedTexture(format!("{w}x{h} RGBA is too large")))?;
+		let mut rgba = Vec::with_capacity(rgba_size);
 		if let Some(decode) = decoder {
 			let mut pixels = vec![0_u32; w * h];
 			decode(top, w, h, &mut pixels).map_err(|e| DxpGrpError::Decompression(e.to_owned()))?;
@@ -528,8 +536,8 @@ impl Texture {
 	}
 
 	/// Bytes in the top mip of a format [`Self::to_rgba`] converts
-	fn top_mip_bytes(&self) -> Option<usize> {
-		let (w, h) = (self.width() as usize, self.height() as usize);
+	fn top_mip_bytes(&self) -> Option<u64> {
+		let (w, h) = (u64::from(self.width()), u64::from(self.height()));
 		let blocks = w.div_ceil(4) * h.div_ceil(4);
 		Some(match &self.header.d3d_format.to_le_bytes() {
 			b"DXT1" | b"ATI1" => blocks * 8,

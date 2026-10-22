@@ -192,11 +192,15 @@ fn read_mat_vdata(r: &mut Cursor, hdr_word: u32) -> Result<Vec<VData>, DxpGrpErr
 	let header = r.bytes(hdr_size)?;
 	let mut h = Cursor::at(header, 16)?;
 	let (tab_ofs, count) = (h.u32()? as usize, h.u32()? as usize);
+	check_table(header, tab_ofs, count, 32)?;
+	// Saturating: a total that does not fit in usize is past the end of the data anyway
 	let mut payload = 0_usize;
 	for i in 0..count {
 		let mut e = Cursor::at(header, tab_ofs + i * 32)?;
 		let (vert_num, w1, w2, flags) = (e.u32()? as usize, e.u32()?, e.u32()?, e.u32()?);
-		payload += vert_num * (w1 & 0xFF) as usize + packed_index_size(w1, w2, flags);
+		payload = payload
+			.saturating_add(vert_num.saturating_mul((w1 & 0xFF) as usize))
+			.saturating_add(packed_index_size(w1, w2, flags));
 	}
 	let mut all = header.to_vec();
 	all.extend_from_slice(r.bytes(payload)?);
@@ -252,7 +256,7 @@ fn read_vdata(vd: &[u8], payload_start: usize) -> Result<Vec<VData>, DxpGrpError
 			)));
 		}
 
-		let vertices = payload.bytes(vert_num * stride)?.to_vec();
+		let vertices = payload.bytes(vert_num.saturating_mul(stride))?.to_vec();
 		let raw = payload.bytes(packed_index_size(w1, w2, flags))?;
 		let indices = if flags & VDATA_PACKED_IB != 0 {
 			decode_index_sequence(raw, idx_count, wide)?
@@ -301,14 +305,17 @@ fn read_mesh(dump: &[u8], at: usize, vdata: &[VData]) -> Result<Vec<Elem>, DxpGr
 		let buffer = vdata.get(elem.vdata).ok_or_else(|| {
 			model_err(format!("element uses missing vertex buffer {}", elem.vdata))
 		})?;
-		let range = buffer
-			.indices
-			.get(elem.first_index..elem.first_index + elem.triangles * 3)
+		let range = elem
+			.triangles
+			.checked_mul(3)
+			.and_then(|n| n.checked_add(elem.first_index))
+			.and_then(|end| buffer.indices.get(elem.first_index..end))
 			.ok_or_else(|| model_err("element index range is out of bounds"))?;
-		if range
-			.iter()
-			.any(|&i| i as usize + elem.base_vertex >= buffer.vertex_count())
-		{
+		if range.iter().any(|&i| {
+			(i as usize)
+				.checked_add(elem.base_vertex)
+				.is_none_or(|v| v >= buffer.vertex_count())
+		}) {
 			return Err(model_err("element references a vertex out of bounds"));
 		}
 		elems.push(elem);
@@ -489,7 +496,7 @@ fn read_skins(
 	}
 	let vdata = read_mat_vdata(r, hdr_size)?;
 
-	let end = section + 8 + total;
+	let end = section.saturating_add(8).saturating_add(total);
 	let zipped = r.bytes(
 		end.checked_sub(r.pos())
 			.ok_or_else(|| model_err("skin section overrun"))?,

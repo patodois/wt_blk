@@ -40,7 +40,7 @@ impl GeomNodeTree {
 		} else {
 			r.rest().to_vec()
 		};
-		if data.len() < dump_size || dump_size < count * NODE_SIZE {
+		if data.len() < dump_size || dump_size / NODE_SIZE < count {
 			return Err(DxpGrpError::Model("node tree data is truncated".to_owned()));
 		}
 

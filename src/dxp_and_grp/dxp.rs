@@ -103,8 +103,9 @@ impl<'a> DxpPack<'a> {
 		}
 		let dump_size = u32_at(file, 0xC)?;
 		let dump = file
-			.get(0x10..0x10 + dump_size)
-			.ok_or(oob(0x10 + dump_size))?;
+			.get(0x10..)
+			.and_then(|rest| rest.get(..dump_size))
+			.ok_or(oob(dump_size.saturating_add(0x10)))?;
 
 		let (names_ofs, count) = (u32_at(dump, 0x00)?, u32_at(dump, 0x04)?);
 		let (headers_ofs, headers_count) = (u32_at(dump, 0x10)?, u32_at(dump, 0x14)?);
@@ -154,11 +155,12 @@ impl<'a> DxpPack<'a> {
 			current_ptr: index,
 			file_size:   self.entries.len(),
 		})?;
+		let end = entry.offset.saturating_add(entry.size);
 		let raw = self
 			.file
-			.get(entry.offset..entry.offset + entry.size)
+			.get(entry.offset..end)
 			.ok_or(IndexingFileOutOfBounds {
-				current_ptr: entry.offset + entry.size,
+				current_ptr: end,
 				file_size:   self.file.len(),
 			})?;
 		Texture::from_ddsx(entry.header, raw)
