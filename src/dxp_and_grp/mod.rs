@@ -174,6 +174,106 @@ mod test {
 		}
 	}
 
+	/// The Sherman's tracks (needs the game: set `WT_GAME_DIR` to its `Resources/game` folder; no game
+	/// data is stored in this repository, and the test is skipped without it)
+	#[test]
+	fn tank_track_skins_follow_the_wheel_bones() {
+		use crate::dxp_and_grp::{
+			dynmodel::DynModel,
+			geom_node_tree::GeomNodeTree,
+			grp_pack::{GrpPack, class_id},
+		};
+
+		let Some(game) = std::env::var_os("WT_GAME_DIR") else {
+			return;
+		};
+		let path =
+			std::path::Path::new(&game).join("content/base/res/tanks/usa_m4a1_76w_sherman.grp");
+		let file = std::fs::read(path).unwrap();
+		let pack = GrpPack::parse(&file).unwrap();
+		let name = "m4a1_76w_sherman";
+		let model =
+			DynModel::parse(pack.data(pack.find(name, class_id::DYN_MODEL).unwrap())).unwrap();
+		let tree = GeomNodeTree::parse(
+			pack.data(
+				pack.find(&format!("{name}_skeleton"), class_id::GEOM_NODE_TREE)
+					.unwrap(),
+			),
+		)
+		.unwrap();
+
+		let lod = &model.lods[0];
+		let skin = |node: &str| lod.skins.iter().find(|s| s.node == node).unwrap();
+		assert_eq!(lod.skins.len(), 3, "antenna and the two tracks");
+		for track in ["track_l", "track_r"] {
+			let skin = skin(track);
+			// 15 bones shared by the three skins: the antenna, the root and the 12 suspension wheels
+			assert_eq!(skin.bones.len(), 15);
+			for bone in skin
+				.bones
+				.iter()
+				.filter(|b| b.node == "root" || b.node.starts_with("bone_wheel_"))
+			{
+				let node = tree
+					.find(&bone.node)
+					.unwrap_or_else(|| panic!("no node {}", bone.node));
+				// The inverse bind matrix undoes the node's place: node world matrix times it is
+				// the identity, up to float rounding. (The antenna's physics bone differs: its
+				// bind pose is not the skeleton's.)
+				let (a, b) = (&node.wtm, &bone.inverse_bind);
+				for col in 0..4 {
+					for row in 0..4 {
+						let v: f32 = (0..4).map(|k| a[k * 4 + row] * b[col * 4 + k]).sum();
+						let expected = if row == col { 1.0 } else { 0.0 };
+						assert!(
+							(v - expected).abs() < 1e-3,
+							"{} [{row}][{col}] = {v}",
+							bone.node
+						);
+					}
+				}
+			}
+			// Every vertex follows one bone: the root, or the wheel bone it wraps around
+			let side = &track[6..];
+			for e in &skin.elems {
+				let vd = &model.skin_vdata[e.vdata];
+				assert_eq!(vd.bone_groups(), 1);
+				let mut wheels = std::collections::BTreeSet::new();
+				for &i in &vd.indices[e.first_index..e.first_index + e.triangles * 3] {
+					let sw = model.skin_weights(vd, i as usize + e.base_vertex).unwrap();
+					assert!((sw.weights.iter().sum::<f32>() - 1.0).abs() < 0.01);
+					let bone = skin.bone(e.material, sw.joints[0] as usize).unwrap();
+					assert!(sw.weights[0] > 0.99 && sw.weights[1..].iter().all(|&w| w == 0.0));
+					if bone.node != "root" {
+						assert!(
+							bone.node.starts_with(&format!("bone_wheel_{side}_")),
+							"{track} vertex on {}",
+							bone.node
+						);
+					}
+					wheels.insert(bone.node.clone());
+				}
+				// root plus the six road wheels of its side
+				assert_eq!(wheels.len(), 7, "{wheels:?}");
+			}
+		}
+		// The antenna blends two bones
+		let antenna = skin("antenna");
+		let vd = &model.skin_vdata[antenna.elems[0].vdata];
+		let e = antenna.elems[0];
+		let blended = vd.indices[e.first_index..e.first_index + e.triangles * 3]
+			.iter()
+			.filter(|&&i| {
+				model
+					.skin_weights(vd, i as usize + e.base_vertex)
+					.unwrap()
+					.weights[1]
+					> 0.0
+			})
+			.count();
+		assert!(blended > 0);
+	}
+
 	#[test]
 	fn geom_node_tree_world_matrices_follow_parents() {
 		use crate::dxp_and_grp::{
